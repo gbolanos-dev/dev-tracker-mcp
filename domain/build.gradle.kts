@@ -1,0 +1,1 @@
+// domain: zero external dependencies
