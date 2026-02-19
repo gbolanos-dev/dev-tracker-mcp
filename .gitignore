@@ -1,6 +1,7 @@
 # Gradle
 .gradle/
-build/
+**/build/
+!.claude/skills/build/
 !gradle/wrapper/gradle-wrapper.jar
 
 # IDE
