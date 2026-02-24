@@ -53,6 +53,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_cycle_
 | `YOUTRACK_BOARD_ID` | No | — | Agile board ID (scrum master) |
 | `YOUTRACK_SP_FIELD` | No | "Story Points" | Story points field name |
 | `YOUTRACK_SPRINT_FIELD` | No | "Sprint" | Sprint field name |
+| `GITHUB_API_URL` | No | `https://api.github.com` | GitHub API base URL (use `https://<host>/api/v3` for GHE) |
 | `GITHUB_TOKEN` | Yes | — | GitHub personal access token |
 | `GITHUB_USERNAME` | Yes | — | GitHub username |
 | `GITHUB_ORG` | No | — | GitHub org (scope repo search) |

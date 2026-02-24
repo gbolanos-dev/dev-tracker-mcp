@@ -28,22 +28,26 @@ import java.util.regex.Pattern;
 public class GitHubClient {
 
     private static final Logger log = LoggerFactory.getLogger(GitHubClient.class);
-    private static final String API_BASE = "https://api.github.com";
+    private static final String DEFAULT_API_BASE = "https://api.github.com";
     private static final int PER_PAGE = 100;
     private static final Gson GSON = new Gson();
     private static final Pattern TICKET_ID_PATTERN = Pattern.compile("([A-Z][A-Z0-9]+-\\d+)");
 
     private final HttpClient http;
+    private final String apiBase;
     private final String token;
     private final String username;
     private final String org;
 
     public GitHubClient() {
         this.http = HttpClient.newHttpClient();
+        this.apiBase = trimTrailingSlash(
+                System.getenv("GITHUB_API_URL") != null ? System.getenv("GITHUB_API_URL") : DEFAULT_API_BASE);
         this.token = System.getenv("GITHUB_TOKEN");
         this.username = System.getenv("GITHUB_USERNAME");
         this.org = System.getenv("GITHUB_ORG");
 
+        log.info("GitHub API base: {}", apiBase);
         if (token == null || token.isBlank()) {
             log.warn("GITHUB_TOKEN is not set — GitHub calls will fail");
         }
@@ -112,7 +116,7 @@ public class GitHubClient {
         int page = 1;
 
         while (true) {
-            String url = API_BASE + "/search/issues"
+            String url = apiBase + "/search/issues"
                     + "?q=" + encode(query)
                     + "&per_page=" + PER_PAGE
                     + "&page=" + page;
@@ -136,13 +140,13 @@ public class GitHubClient {
     // -- PR details ----------------------------------------------------------
 
     private JsonObject fetchPRDetails(String owner, String repo, int number) {
-        String url = API_BASE + "/repos/" + owner + "/" + repo + "/pulls/" + number;
+        String url = apiBase + "/repos/" + owner + "/" + repo + "/pulls/" + number;
         log.debug("Fetching PR details: {}/{} #{}", owner, repo, number);
         return get(url).getAsJsonObject();
     }
 
     private LocalDate fetchReviewDate(String owner, String repo, int number) {
-        String url = API_BASE + "/repos/" + owner + "/" + repo + "/pulls/" + number + "/reviews";
+        String url = apiBase + "/repos/" + owner + "/" + repo + "/pulls/" + number + "/reviews";
         log.debug("Fetching reviews for {}/{} #{}", owner, repo, number);
         JsonArray reviews = get(url).getAsJsonArray();
 
@@ -279,5 +283,9 @@ public class GitHubClient {
 
     private static String encode(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    private static String trimTrailingSlash(String url) {
+        return (url != null && url.endsWith("/")) ? url.substring(0, url.length() - 1) : url;
     }
 }
