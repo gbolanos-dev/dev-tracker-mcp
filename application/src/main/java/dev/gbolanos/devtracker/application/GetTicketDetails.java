@@ -53,6 +53,7 @@ public class GetTicketDetails {
                 issue.storyPoints(),
                 issue.cycleOrigin(),
                 effort,
+                issue.assignee(),
                 null,
                 linkedPRs,
                 issue.youtrackUrl()

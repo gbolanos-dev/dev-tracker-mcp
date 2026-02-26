@@ -106,7 +106,7 @@ public class YouTrackClient {
 
             String url = baseUrl + "/issue/" + id;
             result.add(new YouTrackIssue(id, title, state, type, storyPoints,
-                    origin, kickbacked, assignee, url));
+                    origin, kickbacked, assignee, null, url));
         }
         log.info("Fetched and enriched {} issues from YouTrack", result.size());
         return result;
@@ -141,7 +141,7 @@ public class YouTrackClient {
             String issueUrl = baseUrl + "/issue/" + id;
             result.add(new YouTrackIssue(id, title,
                     state != null ? state : TicketState.OPEN,
-                    type, sp, CycleOrigin.NEW, false, assignee, issueUrl));
+                    type, sp, CycleOrigin.NEW, false, assignee, null, issueUrl));
         }
         log.info("Fetched {} issues from sprint {}", result.size(), sprintId);
         return result;

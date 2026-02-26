@@ -13,6 +13,7 @@ public record YouTrackIssue(
         CycleOrigin cycleOrigin,
         boolean wasKickbacked,
         String assignee,
+        String primaryDev,       // nullable — second ownership field
         String youtrackUrl
 ) {
 }
