@@ -25,7 +25,7 @@ public class GetTicketDetails {
     }
 
     public List<Ticket> execute(LocalDate startDate, LocalDate endDate) {
-        var issues = youTrackClient.fetchIssues(startDate, endDate);
+        var issues = youTrackClient.fetchIssues(startDate, endDate, null);
         var prs = gitHubClient.fetchMergedPRs(startDate, endDate);
 
         Map<String, List<PullRequest>> prsByTicket = prs.stream()
