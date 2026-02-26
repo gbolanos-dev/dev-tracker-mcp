@@ -15,6 +15,7 @@ public record Ticket(
         int devPoints,
         CycleOrigin cycleOrigin,
         EffortLevel effortLevel,
+        String assignee,         // nullable
         String notes,            // nullable
         List<PullRequest> linkedPRs,
         String youtrackUrl

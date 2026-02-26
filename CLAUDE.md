@@ -49,10 +49,12 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_cycle_
 |----------|----------|---------|-------------|
 | `YOUTRACK_URL` | Yes | — | YouTrack base URL |
 | `YOUTRACK_TOKEN` | Yes | — | YouTrack API token |
-| `YOUTRACK_PROJECT_ID` | Yes | — | YouTrack project ID |
-| `YOUTRACK_BOARD_ID` | No | — | Agile board ID (scrum master) |
+| `YOUTRACK_PROJECT_ID` | No | — | YouTrack project ID (scopes queries if set) |
+| `YOUTRACK_BOARD_ID` | No | — | Agile board ID (fallback for sprint queries) |
 | `YOUTRACK_SP_FIELD` | No | "Story Points" | Story points field name |
 | `YOUTRACK_SPRINT_FIELD` | No | "Sprint" | Sprint field name |
+| `YOUTRACK_ASSIGNEE_FIELD` | No | "Assignee" | YouTrack assignee field name |
+| `YOUTRACK_PRIMARY_DEV_FIELD` | No | "Primary Dev" | YouTrack primary developer field name |
 | `GITHUB_API_URL` | No | `https://api.github.com` | GitHub API base URL (use `https://<host>/api/v3` for GHE) |
 | `GITHUB_TOKEN` | Yes | — | GitHub personal access token |
 | `GITHUB_USERNAME` | Yes | — | GitHub username |
@@ -78,9 +80,9 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_cycle_
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `get_cycle_metrics` | `startDate`, `endDate` | Aggregate metrics for the work cycle |
-| `get_ticket_details` | `startDate`, `endDate` | Detailed ticket list with linked PRs and effort |
-| `get_code_reviews` | `startDate`, `endDate` | Code reviews performed by the user |
+| `get_cycle_metrics` | `startDate?`, `endDate?`, `sprintName?`, `project?` | Aggregate metrics for the work cycle |
+| `get_ticket_details` | `startDate?`, `endDate?`, `sprintName?`, `project?` | Detailed ticket list with linked PRs and effort |
+| `get_code_reviews` | `startDate?`, `endDate?`, `sprintName?` | Code reviews performed by the user |
 | `sync_cycle_to_sheets` | `startDate`, `endDate`, `spreadsheetId?` | Push cycle data to Google Sheets |
 | `generate_sprint_summary` | `boardId`, `sprintName` | Team-wide sprint summary (scrum master) |
 

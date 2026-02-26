@@ -16,9 +16,10 @@ public class GetCycleMetrics {
         this.gitHubClient = gitHubClient;
     }
 
-    public CycleMetrics execute(LocalDate startDate, LocalDate endDate) {
-        var tickets = getTicketDetails.execute(startDate, endDate);
-        var reviews = gitHubClient.fetchReviews(startDate, endDate);
-        return PointsCalculator.calculate(tickets, reviews.size());
+    public CycleMetrics execute(LocalDate startDate, LocalDate endDate,
+                                String sprintName, String project) {
+        var result = getTicketDetails.execute(startDate, endDate, sprintName, project);
+        var reviews = gitHubClient.fetchReviews(result.resolvedStartDate(), result.resolvedEndDate());
+        return PointsCalculator.calculate(result.tickets(), reviews.size());
     }
 }

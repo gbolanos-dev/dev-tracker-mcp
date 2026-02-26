@@ -6,6 +6,7 @@ import dev.gbolanos.devtracker.domain.model.PullRequest;
 import dev.gbolanos.devtracker.domain.model.Ticket;
 import dev.gbolanos.devtracker.domain.service.EffortCalculator;
 import dev.gbolanos.devtracker.infrastructure.github.GitHubClient;
+import dev.gbolanos.devtracker.infrastructure.youtrack.SprintResult;
 import dev.gbolanos.devtracker.infrastructure.youtrack.YouTrackClient;
 import dev.gbolanos.devtracker.infrastructure.youtrack.YouTrackIssue;
 
@@ -24,17 +25,34 @@ public class GetTicketDetails {
         this.gitHubClient = gitHubClient;
     }
 
-    public List<Ticket> execute(LocalDate startDate, LocalDate endDate) {
-        var issues = youTrackClient.fetchIssues(startDate, endDate);
-        var prs = gitHubClient.fetchMergedPRs(startDate, endDate);
+    public TicketDetailsResult execute(LocalDate startDate, LocalDate endDate,
+                                       String sprintName, String project) {
+        List<YouTrackIssue> issues;
+        LocalDate resolvedStart;
+        LocalDate resolvedEnd;
+
+        if (sprintName != null && !sprintName.isBlank()) {
+            SprintResult sprint = youTrackClient.fetchSprintWithDates(null, sprintName, project);
+            issues = sprint.issues();
+            resolvedStart = sprint.startDate();
+            resolvedEnd = sprint.endDate();
+        } else {
+            issues = youTrackClient.fetchIssues(startDate, endDate, project);
+            resolvedStart = startDate;
+            resolvedEnd = endDate;
+        }
+
+        var prs = gitHubClient.fetchMergedPRs(resolvedStart, resolvedEnd);
 
         Map<String, List<PullRequest>> prsByTicket = prs.stream()
                 .filter(pr -> pr.linkedTicketId() != null)
                 .collect(Collectors.groupingBy(PullRequest::linkedTicketId));
 
-        return issues.stream()
+        List<Ticket> tickets = issues.stream()
                 .map(issue -> toTicket(issue, prsByTicket.getOrDefault(issue.id(), List.of())))
                 .toList();
+
+        return new TicketDetailsResult(tickets, resolvedStart, resolvedEnd);
     }
 
     private Ticket toTicket(YouTrackIssue issue, List<PullRequest> linkedPRs) {
@@ -53,6 +71,7 @@ public class GetTicketDetails {
                 issue.storyPoints(),
                 issue.cycleOrigin(),
                 effort,
+                issue.assignee(),
                 null,
                 linkedPRs,
                 issue.youtrackUrl()

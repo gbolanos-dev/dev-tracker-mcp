@@ -25,7 +25,7 @@ public class Main {
 
         var getTicketDetails = new GetTicketDetails(youTrackClient, gitHubClient);
         var getCycleMetrics = new GetCycleMetrics(getTicketDetails, gitHubClient);
-        var getCodeReviews = new GetCodeReviews(gitHubClient);
+        var getCodeReviews = new GetCodeReviews(gitHubClient, youTrackClient);
 
         var registry = new ToolRegistry();
         var dateRangeSchema = buildDateRangeSchema();
@@ -35,9 +35,9 @@ public class Main {
                 "Aggregate metrics for a work cycle (tickets, points, reviews)",
                 dateRangeSchema,
                 a -> {
-                    var start = parseDate(a, "startDate");
-                    var end = parseDate(a, "endDate");
-                    return getCycleMetrics.execute(start, end);
+                    var params = parseQueryParams(a);
+                    return getCycleMetrics.execute(params.startDate, params.endDate,
+                            params.sprintName, params.project);
                 }
         ));
 
@@ -46,9 +46,9 @@ public class Main {
                 "Detailed ticket list with linked PRs and effort levels",
                 dateRangeSchema,
                 a -> {
-                    var start = parseDate(a, "startDate");
-                    var end = parseDate(a, "endDate");
-                    return getTicketDetails.execute(start, end);
+                    var params = parseQueryParams(a);
+                    return getTicketDetails.execute(params.startDate, params.endDate,
+                            params.sprintName, params.project);
                 }
         ));
 
@@ -57,9 +57,9 @@ public class Main {
                 "Code reviews performed by the user in the date range",
                 dateRangeSchema,
                 a -> {
-                    var start = parseDate(a, "startDate");
-                    var end = parseDate(a, "endDate");
-                    return getCodeReviews.execute(start, end);
+                    var params = parseQueryParams(a);
+                    return getCodeReviews.execute(params.startDate, params.endDate,
+                            params.sprintName);
                 }
         ));
 
@@ -68,39 +68,71 @@ public class Main {
         server.start();
     }
 
-    private static LocalDate parseDate(JsonObject args, String field) {
-        if (!args.has(field) || args.get(field).isJsonNull()) {
-            throw new IllegalArgumentException("Missing required parameter: " + field);
+    private record QueryParams(LocalDate startDate, LocalDate endDate,
+                                String sprintName, String project) {
+    }
+
+    private static QueryParams parseQueryParams(JsonObject args) {
+        String sprintName = optionalString(args, "sprintName");
+        String project = optionalString(args, "project");
+        LocalDate startDate = optionalDate(args, "startDate");
+        LocalDate endDate = optionalDate(args, "endDate");
+
+        if (sprintName == null && (startDate == null || endDate == null)) {
+            throw new IllegalArgumentException(
+                    "Either 'sprintName' or both 'startDate' and 'endDate' must be provided");
         }
-        var value = args.get(field).getAsString();
+
+        return new QueryParams(startDate, endDate, sprintName, project);
+    }
+
+    private static LocalDate optionalDate(JsonObject args, String field) {
+        String value = optionalString(args, field);
+        if (value == null) {
+            return null;
+        }
         try {
             return LocalDate.parse(value);
         } catch (DateTimeParseException e) {
-            throw new IllegalArgumentException("Invalid date format for " + field + ": " + value + " (expected yyyy-MM-dd)");
+            throw new IllegalArgumentException(
+                    "Invalid date format for " + field + ": " + value + " (expected yyyy-MM-dd)");
         }
+    }
+
+    private static String optionalString(JsonObject args, String field) {
+        if (!args.has(field) || args.get(field).isJsonNull()) {
+            return null;
+        }
+        String value = args.get(field).getAsString();
+        return value.isBlank() ? null : value;
     }
 
     private static JsonObject buildDateRangeSchema() {
         var startDate = new JsonObject();
         startDate.addProperty("type", "string");
-        startDate.addProperty("description", "Start date in yyyy-MM-dd format");
+        startDate.addProperty("description", "Start date in yyyy-MM-dd format (required if no sprintName)");
 
         var endDate = new JsonObject();
         endDate.addProperty("type", "string");
-        endDate.addProperty("description", "End date in yyyy-MM-dd format");
+        endDate.addProperty("description", "End date in yyyy-MM-dd format (required if no sprintName)");
+
+        var sprintName = new JsonObject();
+        sprintName.addProperty("type", "string");
+        sprintName.addProperty("description", "Sprint name (e.g. 'Work Cycle 2') — alternative to date range");
+
+        var project = new JsonObject();
+        project.addProperty("type", "string");
+        project.addProperty("description", "YouTrack project ID to filter by (e.g. 'IGN'). Optional — defaults to all projects or YOUTRACK_PROJECT_ID");
 
         var properties = new JsonObject();
         properties.add("startDate", startDate);
         properties.add("endDate", endDate);
-
-        var required = new JsonArray();
-        required.add("startDate");
-        required.add("endDate");
+        properties.add("sprintName", sprintName);
+        properties.add("project", project);
 
         var schema = new JsonObject();
         schema.addProperty("type", "object");
         schema.add("properties", properties);
-        schema.add("required", required);
         return schema;
     }
 }

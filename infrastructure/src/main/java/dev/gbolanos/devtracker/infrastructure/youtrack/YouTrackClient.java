@@ -42,7 +42,7 @@ public class YouTrackClient {
     );
 
     private static final String ISSUE_FIELDS =
-            "idReadable,summary,customFields(name,value(name,value,$type))";
+            "idReadable,summary,customFields(name,value(name,value,login,fullName,$type))";
     private static final String SPRINT_ISSUE_FIELDS =
             "idReadable,summary,customFields(name,value(name,value,login,fullName,$type))";
     private static final String ACTIVITY_FIELDS =
@@ -53,18 +53,30 @@ public class YouTrackClient {
     private final String baseUrl;
     private final String token;
     private final String projectId;
+    private final String boardId;
     private final String spField;
     private final String sprintField;
+    private final String assigneeField;
+    private final String primaryDevField;
+
+    // Cached current user info (lazy-loaded)
+    private String currentUserLogin;
+    private String currentUserFullName;
 
     public YouTrackClient() {
         this.http = HttpClient.newHttpClient();
         this.baseUrl = trimTrailingSlash(System.getenv("YOUTRACK_URL"));
         this.token = System.getenv("YOUTRACK_TOKEN");
         this.projectId = System.getenv("YOUTRACK_PROJECT_ID");
+        this.boardId = System.getenv("YOUTRACK_BOARD_ID");
         this.spField = Optional.ofNullable(System.getenv("YOUTRACK_SP_FIELD"))
                 .orElse("Story Points");
         this.sprintField = Optional.ofNullable(System.getenv("YOUTRACK_SPRINT_FIELD"))
                 .orElse("Sprint");
+        this.assigneeField = Optional.ofNullable(System.getenv("YOUTRACK_ASSIGNEE_FIELD"))
+                .orElse("Assignee");
+        this.primaryDevField = Optional.ofNullable(System.getenv("YOUTRACK_PRIMARY_DEV_FIELD"))
+                .orElse("Primary Dev");
 
         if (baseUrl == null || baseUrl.isBlank()) {
             log.warn("YOUTRACK_URL is not set — YouTrack calls will fail");
@@ -73,17 +85,26 @@ public class YouTrackClient {
             log.warn("YOUTRACK_TOKEN is not set — YouTrack calls will fail");
         }
         if (projectId == null || projectId.isBlank()) {
-            log.warn("YOUTRACK_PROJECT_ID is not set — YouTrack calls will fail");
+            log.debug("YOUTRACK_PROJECT_ID is not set — queries will search all projects");
         }
     }
 
     // -- Public API ----------------------------------------------------------
 
-    public List<YouTrackIssue> fetchIssues(LocalDate startDate, LocalDate endDate) {
+    public List<YouTrackIssue> fetchIssues(LocalDate startDate, LocalDate endDate, String project) {
         requireConfig();
-        String query = "project: {" + projectId + "} updated: " + startDate + " .. " + endDate;
 
-        List<JsonObject> rawIssues = fetchAllPages("/api/issues", query, ISSUE_FIELDS);
+        StringBuilder query = new StringBuilder();
+        query.append("(").append(assigneeField).append(": me");
+        query.append(" OR #{").append(primaryDevField).append("}: me)");
+        query.append(" updated: ").append(startDate).append(" .. ").append(endDate);
+
+        String effectiveProject = resolveProject(project);
+        if (effectiveProject != null) {
+            query.append(" project: {").append(effectiveProject).append("}");
+        }
+
+        List<JsonObject> rawIssues = fetchAllPages("/api/issues", query.toString(), ISSUE_FIELDS);
 
         List<YouTrackIssue> result = new ArrayList<>();
         for (JsonObject raw : rawIssues) {
@@ -98,7 +119,8 @@ public class YouTrackClient {
             }
             TicketType type = parseTypeField(cfMap);
             int storyPoints = parseIntField(cfMap, spField);
-            String assignee = parseAssignee(cfMap);
+            String assignee = parseUserField(cfMap, assigneeField);
+            String primaryDev = parseUserField(cfMap, primaryDevField);
 
             List<JsonObject> activities = fetchIssueActivities(id);
             CycleOrigin origin = determineCycleOrigin(activities, startDate);
@@ -106,10 +128,67 @@ public class YouTrackClient {
 
             String url = baseUrl + "/issue/" + id;
             result.add(new YouTrackIssue(id, title, state, type, storyPoints,
-                    origin, kickbacked, assignee, url));
+                    origin, kickbacked, assignee, primaryDev, url));
         }
         log.info("Fetched and enriched {} issues from YouTrack", result.size());
         return result;
+    }
+
+    public SprintResult fetchSprintWithDates(String boardId, String sprintName, String project) {
+        requireConfig();
+        String effectiveBoardId = boardId != null ? boardId : this.boardId;
+        requireBoardId(effectiveBoardId);
+
+        String sprintId = findSprintIdByName(effectiveBoardId, sprintName);
+
+        String fields = "id,name,start,finish,issues(" + SPRINT_ISSUE_FIELDS + ")";
+        String url = baseUrl + "/api/agiles/" + effectiveBoardId + "/sprints/" + sprintId
+                + "?fields=" + encode(fields);
+
+        log.info("Fetching sprint '{}' with dates for board={}", sprintName, effectiveBoardId);
+        JsonObject sprintObj = get(url).getAsJsonObject();
+
+        LocalDate startDate = sprintObj.has("start") && !sprintObj.get("start").isJsonNull()
+                ? toLocalDate(sprintObj.get("start").getAsLong()) : null;
+        LocalDate endDate = sprintObj.has("finish") && !sprintObj.get("finish").isJsonNull()
+                ? toLocalDate(sprintObj.get("finish").getAsLong()) : null;
+
+        JsonArray issuesArr = sprintObj.has("issues")
+                ? sprintObj.getAsJsonArray("issues")
+                : new JsonArray();
+
+        ensureCurrentUser();
+
+        List<YouTrackIssue> result = new ArrayList<>();
+        for (JsonElement el : issuesArr) {
+            JsonObject raw = el.getAsJsonObject();
+            String id = raw.get("idReadable").getAsString();
+            String title = raw.get("summary").getAsString();
+            Map<String, JsonElement> cfMap = buildCustomFieldMap(raw);
+
+            String assignee = parseUserField(cfMap, assigneeField);
+            String primaryDev = parseUserField(cfMap, primaryDevField);
+
+            if (!isCurrentUser(assignee) && !isCurrentUser(primaryDev)) {
+                continue;
+            }
+
+            String effectiveProject = resolveProject(project);
+            if (effectiveProject != null && !id.startsWith(effectiveProject + "-")) {
+                continue;
+            }
+
+            TicketState state = parseStateField(cfMap);
+            TicketType type = parseTypeField(cfMap);
+            int sp = parseIntField(cfMap, spField);
+
+            String issueUrl = baseUrl + "/issue/" + id;
+            result.add(new YouTrackIssue(id, title,
+                    state != null ? state : TicketState.OPEN,
+                    type, sp, CycleOrigin.NEW, false, assignee, primaryDev, issueUrl));
+        }
+        log.info("Fetched {} issues from sprint '{}' (filtered to current user)", result.size(), sprintName);
+        return new SprintResult(result, startDate, endDate);
     }
 
     public List<YouTrackIssue> fetchSprintIssues(String boardId, String sprintId) {
@@ -136,12 +215,13 @@ public class YouTrackClient {
             TicketState state = parseStateField(cfMap);
             TicketType type = parseTypeField(cfMap);
             int sp = parseIntField(cfMap, spField);
-            String assignee = parseAssignee(cfMap);
+            String assignee = parseUserField(cfMap, assigneeField);
+            String primaryDev = parseUserField(cfMap, primaryDevField);
 
             String issueUrl = baseUrl + "/issue/" + id;
             result.add(new YouTrackIssue(id, title,
                     state != null ? state : TicketState.OPEN,
-                    type, sp, CycleOrigin.NEW, false, assignee, issueUrl));
+                    type, sp, CycleOrigin.NEW, false, assignee, primaryDev, issueUrl));
         }
         log.info("Fetched {} issues from sprint {}", result.size(), sprintId);
         return result;
@@ -165,6 +245,35 @@ public class YouTrackClient {
         }
         throw new IllegalArgumentException(
                 "Sprint '" + sprintName + "' not found on board " + boardId);
+    }
+
+    public String resolveBoardId(String boardId) {
+        String effective = boardId != null ? boardId : this.boardId;
+        requireBoardId(effective);
+        return effective;
+    }
+
+    // -- Current user --------------------------------------------------------
+
+    private void ensureCurrentUser() {
+        if (currentUserLogin != null) {
+            return;
+        }
+        String url = baseUrl + "/api/users/me?fields=" + encode("login,fullName");
+        log.info("Fetching current YouTrack user");
+        JsonObject user = get(url).getAsJsonObject();
+        currentUserLogin = user.has("login") ? user.get("login").getAsString() : null;
+        currentUserFullName = user.has("fullName") && !user.get("fullName").isJsonNull()
+                ? user.get("fullName").getAsString() : null;
+        log.info("Current YouTrack user: login={}, fullName={}", currentUserLogin, currentUserFullName);
+    }
+
+    private boolean isCurrentUser(String value) {
+        if (value == null) {
+            return false;
+        }
+        return value.equalsIgnoreCase(currentUserLogin)
+                || value.equalsIgnoreCase(currentUserFullName);
     }
 
     // -- HTTP ----------------------------------------------------------------
@@ -353,8 +462,8 @@ public class YouTrackClient {
         return 0;
     }
 
-    private String parseAssignee(Map<String, JsonElement> cfMap) {
-        JsonElement val = cfMap.get("Assignee");
+    private String parseUserField(Map<String, JsonElement> cfMap, String fieldName) {
+        JsonElement val = cfMap.get(fieldName);
         if (val == null || val.isJsonNull() || !val.isJsonObject()) {
             return null;
         }
@@ -384,6 +493,16 @@ public class YouTrackClient {
             throw new IllegalStateException(
                     "boardId is required — set YOUTRACK_BOARD_ID or pass it explicitly");
         }
+    }
+
+    private String resolveProject(String project) {
+        if (project != null && !project.isBlank()) {
+            return project;
+        }
+        if (projectId != null && !projectId.isBlank()) {
+            return projectId;
+        }
+        return null;
     }
 
     private static LocalDate toLocalDate(long epochMs) {
