@@ -50,7 +50,8 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_cycle_
 | `YOUTRACK_URL` | Yes | — | YouTrack base URL |
 | `YOUTRACK_TOKEN` | Yes | — | YouTrack API token |
 | `YOUTRACK_PROJECT_ID` | No | — | YouTrack project ID (scopes queries if set) |
-| `YOUTRACK_BOARD_ID` | No | — | Agile board ID (fallback for sprint queries) |
+| `YOUTRACK_BOARD_ID` | No | — | Agile board ID (primary board for sprint date resolution) |
+| `YOUTRACK_LEGACY_BOARD_ID` | No | — | Fallback board ID for older sprint names |
 | `YOUTRACK_SP_FIELD` | No | "Story Points" | Story points field name |
 | `YOUTRACK_SPRINT_FIELD` | No | "Sprint" | Sprint field name |
 | `YOUTRACK_ASSIGNEE_FIELD` | No | "Assignee" | YouTrack assignee field name |
