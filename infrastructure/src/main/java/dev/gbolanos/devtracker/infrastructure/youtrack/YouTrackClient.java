@@ -54,6 +54,7 @@ public class YouTrackClient {
     private final String token;
     private final String projectId;
     private final String boardId;
+    private final String legacyBoardId;
     private final String spField;
     private final String sprintField;
     private final String assigneeField;
@@ -69,6 +70,7 @@ public class YouTrackClient {
         this.token = System.getenv("YOUTRACK_TOKEN");
         this.projectId = System.getenv("YOUTRACK_PROJECT_ID");
         this.boardId = System.getenv("YOUTRACK_BOARD_ID");
+        this.legacyBoardId = System.getenv("YOUTRACK_LEGACY_BOARD_ID");
         this.spField = Optional.ofNullable(System.getenv("YOUTRACK_SP_FIELD"))
                 .orElse("Story Points");
         this.sprintField = Optional.ofNullable(System.getenv("YOUTRACK_SPRINT_FIELD"))
@@ -134,61 +136,54 @@ public class YouTrackClient {
         return result;
     }
 
-    public SprintResult fetchSprintWithDates(String boardId, String sprintName, String project) {
+    public SprintDateRange resolveSprintDates(String sprintName) {
         requireConfig();
-        String effectiveBoardId = boardId != null ? boardId : this.boardId;
-        requireBoardId(effectiveBoardId);
+        requireBoardId(this.boardId);
 
-        String sprintId = findSprintIdByName(effectiveBoardId, sprintName);
-
-        String fields = "id,name,start,finish,issues(" + SPRINT_ISSUE_FIELDS + ")";
-        String url = baseUrl + "/api/agiles/" + effectiveBoardId + "/sprints/" + sprintId
-                + "?fields=" + encode(fields);
-
-        log.info("Fetching sprint '{}' with dates for board={}", sprintName, effectiveBoardId);
-        JsonObject sprintObj = get(url).getAsJsonObject();
-
-        LocalDate startDate = sprintObj.has("start") && !sprintObj.get("start").isJsonNull()
-                ? toLocalDate(sprintObj.get("start").getAsLong()) : null;
-        LocalDate endDate = sprintObj.has("finish") && !sprintObj.get("finish").isJsonNull()
-                ? toLocalDate(sprintObj.get("finish").getAsLong()) : null;
-
-        JsonArray issuesArr = sprintObj.has("issues")
-                ? sprintObj.getAsJsonArray("issues")
-                : new JsonArray();
-
-        ensureCurrentUser();
-
-        List<YouTrackIssue> result = new ArrayList<>();
-        for (JsonElement el : issuesArr) {
-            JsonObject raw = el.getAsJsonObject();
-            String id = raw.get("idReadable").getAsString();
-            String title = raw.get("summary").getAsString();
-            Map<String, JsonElement> cfMap = buildCustomFieldMap(raw);
-
-            String assignee = parseUserField(cfMap, assigneeField);
-            String primaryDev = parseUserField(cfMap, primaryDevField);
-
-            if (!isCurrentUser(assignee) && !isCurrentUser(primaryDev)) {
-                continue;
-            }
-
-            String effectiveProject = resolveProject(project);
-            if (effectiveProject != null && !id.startsWith(effectiveProject + "-")) {
-                continue;
-            }
-
-            TicketState state = parseStateField(cfMap);
-            TicketType type = parseTypeField(cfMap);
-            int sp = parseIntField(cfMap, spField);
-
-            String issueUrl = baseUrl + "/issue/" + id;
-            result.add(new YouTrackIssue(id, title,
-                    state != null ? state : TicketState.OPEN,
-                    type, sp, CycleOrigin.NEW, false, assignee, primaryDev, issueUrl));
+        SprintDateRange result = tryResolveSprintDates(this.boardId, sprintName);
+        if (result != null) {
+            return result;
         }
-        log.info("Fetched {} issues from sprint '{}' (filtered to current user)", result.size(), sprintName);
-        return new SprintResult(result, startDate, endDate);
+
+        if (legacyBoardId != null && !legacyBoardId.isBlank()) {
+            log.info("Sprint '{}' not found on primary board, trying legacy board {}", sprintName, legacyBoardId);
+            result = tryResolveSprintDates(legacyBoardId, sprintName);
+            if (result != null) {
+                return result;
+            }
+        }
+
+        throw new IllegalArgumentException(
+                "Sprint '" + sprintName + "' not found on board " + this.boardId
+                        + (legacyBoardId != null ? " or legacy board " + legacyBoardId : ""));
+    }
+
+    private SprintDateRange tryResolveSprintDates(String boardId, String sprintName) {
+        String url = baseUrl + "/api/agiles/" + boardId + "/sprints"
+                + "?fields=" + encode(SPRINT_FIELDS)
+                + "&$top=50";
+
+        log.info("Looking up sprint '{}' on board {} for date resolution", sprintName, boardId);
+        JsonArray sprints = get(url).getAsJsonArray();
+
+        for (JsonElement el : sprints) {
+            JsonObject sprint = el.getAsJsonObject();
+            if (sprintName.equals(sprint.get("name").getAsString())) {
+                LocalDate start = sprint.has("start") && !sprint.get("start").isJsonNull()
+                        ? toLocalDate(sprint.get("start").getAsLong()) : null;
+                LocalDate end = sprint.has("finish") && !sprint.get("finish").isJsonNull()
+                        ? toLocalDate(sprint.get("finish").getAsLong()) : null;
+                log.info("Resolved sprint '{}' → {} to {}", sprintName, start, end);
+                return new SprintDateRange(start, end);
+            }
+        }
+        return null;
+    }
+
+    public SprintResult fetchSprintWithDates(String boardId, String sprintName, String project) {
+        SprintDateRange dates = resolveSprintDates(sprintName);
+        List<YouTrackIssue> issues = fetchIssues(dates.startDate(), dates.endDate(), project);
+        return new SprintResult(issues, dates.startDate(), dates.endDate());
     }
 
     public List<YouTrackIssue> fetchSprintIssues(String boardId, String sprintId) {

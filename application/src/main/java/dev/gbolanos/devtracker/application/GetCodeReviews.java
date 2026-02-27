@@ -2,7 +2,7 @@ package dev.gbolanos.devtracker.application;
 
 import dev.gbolanos.devtracker.domain.model.CodeReview;
 import dev.gbolanos.devtracker.infrastructure.github.GitHubClient;
-import dev.gbolanos.devtracker.infrastructure.youtrack.SprintResult;
+import dev.gbolanos.devtracker.infrastructure.youtrack.SprintDateRange;
 import dev.gbolanos.devtracker.infrastructure.youtrack.YouTrackClient;
 
 import java.time.LocalDate;
@@ -23,9 +23,9 @@ public class GetCodeReviews {
         LocalDate resolvedEnd = endDate;
 
         if (sprintName != null && !sprintName.isBlank()) {
-            SprintResult sprint = youTrackClient.fetchSprintWithDates(null, sprintName, null);
-            resolvedStart = sprint.startDate();
-            resolvedEnd = sprint.endDate();
+            SprintDateRange dates = youTrackClient.resolveSprintDates(sprintName);
+            resolvedStart = dates.startDate();
+            resolvedEnd = dates.endDate();
         }
 
         return gitHubClient.fetchReviews(resolvedStart, resolvedEnd);
