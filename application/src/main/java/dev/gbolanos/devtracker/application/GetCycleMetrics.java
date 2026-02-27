@@ -19,7 +19,9 @@ public class GetCycleMetrics {
     public CycleMetrics execute(LocalDate startDate, LocalDate endDate,
                                 String sprintName, String project) {
         var result = getTicketDetails.execute(startDate, endDate, sprintName, project);
-        var reviews = gitHubClient.fetchReviews(result.resolvedStartDate(), result.resolvedEndDate());
-        return PointsCalculator.calculate(result.tickets(), reviews.size());
+        int reviewCount = (result.resolvedStartDate() != null && result.resolvedEndDate() != null)
+                ? gitHubClient.fetchReviews(result.resolvedStartDate(), result.resolvedEndDate()).size()
+                : 0;
+        return PointsCalculator.calculate(result.tickets(), reviewCount);
     }
 }

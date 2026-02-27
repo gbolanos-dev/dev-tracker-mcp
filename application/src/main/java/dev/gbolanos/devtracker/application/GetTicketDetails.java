@@ -42,7 +42,9 @@ public class GetTicketDetails {
             resolvedEnd = endDate;
         }
 
-        var prs = gitHubClient.fetchMergedPRs(resolvedStart, resolvedEnd);
+        var prs = (resolvedStart != null && resolvedEnd != null)
+                ? gitHubClient.fetchMergedPRs(resolvedStart, resolvedEnd)
+                : List.<PullRequest>of();
 
         Map<String, List<PullRequest>> prsByTicket = prs.stream()
                 .filter(pr -> pr.linkedTicketId() != null)
