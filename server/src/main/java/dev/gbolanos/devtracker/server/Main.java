@@ -32,7 +32,7 @@ public class Main {
 
         registry.register(new ToolDefinition(
                 "get_cycle_metrics",
-                "Aggregate metrics for a work cycle (tickets, points, reviews)",
+                "Aggregate metrics for a work cycle (tickets, points, reviews). Prefer using sprintName over date range.",
                 dateRangeSchema,
                 a -> {
                     var params = parseQueryParams(a);
@@ -43,7 +43,7 @@ public class Main {
 
         registry.register(new ToolDefinition(
                 "get_ticket_details",
-                "Detailed ticket list with linked PRs and effort levels",
+                "Detailed ticket list with linked PRs and effort levels. Prefer using sprintName over date range.",
                 dateRangeSchema,
                 a -> {
                     var params = parseQueryParams(a);
@@ -54,7 +54,7 @@ public class Main {
 
         registry.register(new ToolDefinition(
                 "get_code_reviews",
-                "Code reviews performed by the user in the date range",
+                "Code reviews performed by the user. Prefer using sprintName over date range.",
                 dateRangeSchema,
                 a -> {
                     var params = parseQueryParams(a);
@@ -108,26 +108,27 @@ public class Main {
     }
 
     private static JsonObject buildDateRangeSchema() {
+        var sprintName = new JsonObject();
+        sprintName.addProperty("type", "string");
+        sprintName.addProperty("description",
+                "Sprint name (e.g. 'Work Cycle 2'). Preferred — use this instead of date range. Dates are resolved automatically from the sprint.");
+
         var startDate = new JsonObject();
         startDate.addProperty("type", "string");
-        startDate.addProperty("description", "Start date in yyyy-MM-dd format (required if no sprintName)");
+        startDate.addProperty("description", "Start date in yyyy-MM-dd format. Only needed if sprintName is not provided.");
 
         var endDate = new JsonObject();
         endDate.addProperty("type", "string");
-        endDate.addProperty("description", "End date in yyyy-MM-dd format (required if no sprintName)");
-
-        var sprintName = new JsonObject();
-        sprintName.addProperty("type", "string");
-        sprintName.addProperty("description", "Sprint name (e.g. 'Work Cycle 2') — alternative to date range");
+        endDate.addProperty("description", "End date in yyyy-MM-dd format. Only needed if sprintName is not provided.");
 
         var project = new JsonObject();
         project.addProperty("type", "string");
         project.addProperty("description", "YouTrack project ID to filter by (e.g. 'IGN'). Optional — defaults to all projects or YOUTRACK_PROJECT_ID");
 
         var properties = new JsonObject();
+        properties.add("sprintName", sprintName);
         properties.add("startDate", startDate);
         properties.add("endDate", endDate);
-        properties.add("sprintName", sprintName);
         properties.add("project", project);
 
         var schema = new JsonObject();
