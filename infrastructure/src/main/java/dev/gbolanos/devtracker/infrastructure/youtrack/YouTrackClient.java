@@ -138,24 +138,52 @@ public class YouTrackClient {
 
     public SprintDateRange resolveSprintDates(String sprintName) {
         requireConfig();
-        requireBoardId(this.boardId);
 
-        SprintDateRange result = tryResolveSprintDates(this.boardId, sprintName);
-        if (result != null) {
-            return result;
-        }
-
-        if (legacyBoardId != null && !legacyBoardId.isBlank()) {
-            log.info("Sprint '{}' not found on primary board, trying legacy board {}", sprintName, legacyBoardId);
-            result = tryResolveSprintDates(legacyBoardId, sprintName);
+        // Fast path: check configured board IDs first
+        if (boardId != null && !boardId.isBlank()) {
+            SprintDateRange result = tryResolveSprintDates(this.boardId, sprintName);
             if (result != null) {
                 return result;
             }
         }
 
+        if (legacyBoardId != null && !legacyBoardId.isBlank()) {
+            log.info("Sprint '{}' not found on primary board, trying legacy board {}", sprintName, legacyBoardId);
+            SprintDateRange result = tryResolveSprintDates(legacyBoardId, sprintName);
+            if (result != null) {
+                return result;
+            }
+        }
+
+        // Fallback: search all boards
+        log.info("Sprint '{}' not found on configured boards, searching all boards", sprintName);
+        SprintDateRange result = searchAllBoardsForSprint(sprintName);
+        if (result != null) {
+            return result;
+        }
+
         throw new IllegalArgumentException(
-                "Sprint '" + sprintName + "' not found on board " + this.boardId
-                        + (legacyBoardId != null ? " or legacy board " + legacyBoardId : ""));
+                "Sprint '" + sprintName + "' not found on any board");
+    }
+
+    private SprintDateRange searchAllBoardsForSprint(String sprintName) {
+        String url = baseUrl + "/api/agiles?fields=" + encode("id,name") + "&$top=100";
+        log.debug("Listing all agile boards");
+        JsonArray boards = get(url).getAsJsonArray();
+
+        for (JsonElement el : boards) {
+            JsonObject board = el.getAsJsonObject();
+            String id = board.get("id").getAsString();
+            String name = board.has("name") && !board.get("name").isJsonNull()
+                    ? board.get("name").getAsString() : id;
+
+            SprintDateRange result = tryResolveSprintDates(id, sprintName);
+            if (result != null) {
+                log.info("Found sprint '{}' on board '{}' ({})", sprintName, name, id);
+                return result;
+            }
+        }
+        return null;
     }
 
     private SprintDateRange tryResolveSprintDates(String boardId, String sprintName) {
