@@ -22,11 +22,14 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 public class YouTrackClient {
 
@@ -49,16 +52,22 @@ public class YouTrackClient {
             "timestamp,field(name),added(name,$type),removed(name,$type)";
     private static final String SPRINT_FIELDS = "id,name,start,finish,archived";
 
+    private record BoardInfo(String id, String name, List<String> projectShortNames) {}
+
     private final HttpClient http;
     private final String baseUrl;
     private final String token;
-    private final String projectId;
-    private final String boardId;
-    private final String legacyBoardId;
+    private final List<String> boardNames;
+    private final String legacyBoardName;
     private final String spField;
     private final String sprintField;
     private final String assigneeField;
     private final String primaryDevField;
+
+    // Cached board resolution (lazy-loaded)
+    private List<BoardInfo> resolvedBoards;
+    private BoardInfo resolvedLegacyBoard;
+    private List<String> derivedProjects;
 
     // Cached current user info (lazy-loaded)
     private String currentUserLogin;
@@ -68,9 +77,9 @@ public class YouTrackClient {
         this.http = HttpClient.newHttpClient();
         this.baseUrl = trimTrailingSlash(System.getenv("YOUTRACK_URL"));
         this.token = System.getenv("YOUTRACK_TOKEN");
-        this.projectId = System.getenv("YOUTRACK_PROJECT_ID");
-        this.boardId = System.getenv("YOUTRACK_BOARD_ID");
-        this.legacyBoardId = System.getenv("YOUTRACK_LEGACY_BOARD_ID");
+        this.boardNames = parseBoardNames(System.getenv("YOUTRACK_BOARDS"));
+        this.legacyBoardName = Optional.ofNullable(System.getenv("YOUTRACK_LEGACY_BOARD"))
+                .filter(s -> !s.isBlank()).orElse(null);
         this.spField = Optional.ofNullable(System.getenv("YOUTRACK_SP_FIELD"))
                 .orElse("Story Points");
         this.sprintField = Optional.ofNullable(System.getenv("YOUTRACK_SPRINT_FIELD"))
@@ -86,25 +95,32 @@ public class YouTrackClient {
         if (token == null || token.isBlank()) {
             log.warn("YOUTRACK_TOKEN is not set — YouTrack calls will fail");
         }
-        if (projectId == null || projectId.isBlank()) {
-            log.debug("YOUTRACK_PROJECT_ID is not set — queries will search all projects");
+        if (boardNames.isEmpty() && legacyBoardName == null) {
+            log.debug("YOUTRACK_BOARDS is not set — project scope will not be derived from boards");
         }
+    }
+
+    private static List<String> parseBoardNames(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        return Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
     }
 
     // -- Public API ----------------------------------------------------------
 
     public List<YouTrackIssue> fetchIssues(LocalDate startDate, LocalDate endDate, String project) {
         requireConfig();
+        ensureBoardsResolved();
 
         StringBuilder query = new StringBuilder();
         query.append("(").append(queryFieldRef(assigneeField)).append(": me");
         query.append(" OR ").append(queryFieldRef(primaryDevField)).append(": me)");
         query.append(" updated: ").append(startDate).append(" .. ").append(endDate);
-
-        String effectiveProject = resolveProject(project);
-        if (effectiveProject != null) {
-            query.append(" project: {").append(effectiveProject).append("}");
-        }
+        query.append(buildProjectClause(project));
 
         List<JsonObject> rawIssues = fetchAllPages("/api/issues", query.toString(), ISSUE_FIELDS);
         return enrichRawIssues(rawIssues, startDate);
@@ -112,16 +128,13 @@ public class YouTrackClient {
 
     public List<YouTrackIssue> fetchIssuesBySprint(String sprintName, String project, LocalDate cycleStart) {
         requireConfig();
+        ensureBoardsResolved();
 
         StringBuilder query = new StringBuilder();
         query.append(queryFieldRef(sprintField)).append(": {").append(sprintName).append("}");
         query.append(" (").append(queryFieldRef(assigneeField)).append(": me");
         query.append(" OR ").append(queryFieldRef(primaryDevField)).append(": me)");
-
-        String effectiveProject = resolveProject(project);
-        if (effectiveProject != null) {
-            query.append(" project: {").append(effectiveProject).append("}");
-        }
+        query.append(buildProjectClause(project));
 
         log.info("Querying issues by sprint field: {}", query);
         List<JsonObject> rawIssues = fetchAllPages("/api/issues", query.toString(), ISSUE_FIELDS);
@@ -139,18 +152,24 @@ public class YouTrackClient {
 
     public SprintDateRange tryResolveSprintDates(String sprintName) {
         requireConfig();
+        ensureBoardsResolved();
 
-        // Fast path: check configured board IDs first
-        if (boardId != null && !boardId.isBlank()) {
-            SprintDateRange result = tryResolveSprintDatesOnBoard(this.boardId, sprintName);
-            if (result != null) {
-                return result;
+        // Try resolved boards first
+        if (resolvedBoards != null) {
+            for (BoardInfo board : resolvedBoards) {
+                SprintDateRange result = tryResolveSprintDatesOnBoard(board.id(), sprintName);
+                if (result != null) {
+                    log.info("Found sprint '{}' on board '{}'", sprintName, board.name());
+                    return result;
+                }
             }
         }
 
-        if (legacyBoardId != null && !legacyBoardId.isBlank()) {
-            log.info("Sprint '{}' not found on primary board, trying legacy board {}", sprintName, legacyBoardId);
-            SprintDateRange result = tryResolveSprintDatesOnBoard(legacyBoardId, sprintName);
+        // Try legacy board
+        if (resolvedLegacyBoard != null) {
+            log.info("Sprint '{}' not found on primary boards, trying legacy board '{}'",
+                    sprintName, resolvedLegacyBoard.name());
+            SprintDateRange result = tryResolveSprintDatesOnBoard(resolvedLegacyBoard.id(), sprintName);
             if (result != null) {
                 return result;
             }
@@ -220,12 +239,12 @@ public class YouTrackClient {
 
     public List<YouTrackIssue> fetchSprintIssues(String boardId, String sprintId) {
         requireConfig();
-        requireBoardId(boardId);
+        String effectiveBoardId = resolveBoardId(boardId);
         String fields = "id,name,start,finish,issues(" + SPRINT_ISSUE_FIELDS + ")";
-        String url = baseUrl + "/api/agiles/" + boardId + "/sprints/" + sprintId
+        String url = baseUrl + "/api/agiles/" + effectiveBoardId + "/sprints/" + sprintId
                 + "?fields=" + encode(fields);
 
-        log.info("Fetching sprint issues for board={}, sprint={}", boardId, sprintId);
+        log.info("Fetching sprint issues for board={}, sprint={}", effectiveBoardId, sprintId);
         JsonObject sprintObj = get(url).getAsJsonObject();
 
         JsonArray issuesArr = sprintObj.has("issues")
@@ -256,12 +275,12 @@ public class YouTrackClient {
 
     public String findSprintIdByName(String boardId, String sprintName) {
         requireConfig();
-        requireBoardId(boardId);
-        String url = baseUrl + "/api/agiles/" + boardId + "/sprints"
+        String effectiveBoardId = resolveBoardId(boardId);
+        String url = baseUrl + "/api/agiles/" + effectiveBoardId + "/sprints"
                 + "?fields=" + encode(SPRINT_FIELDS)
                 + "&$top=200";
 
-        log.info("Looking up sprint '{}' on board {}", sprintName, boardId);
+        log.info("Looking up sprint '{}' on board {}", sprintName, effectiveBoardId);
         JsonArray sprints = get(url).getAsJsonArray();
 
         for (JsonElement el : sprints) {
@@ -271,13 +290,22 @@ public class YouTrackClient {
             }
         }
         throw new IllegalArgumentException(
-                "Sprint '" + sprintName + "' not found on board " + boardId);
+                "Sprint '" + sprintName + "' not found on board " + effectiveBoardId);
     }
 
     public String resolveBoardId(String boardId) {
-        String effective = boardId != null ? boardId : this.boardId;
-        requireBoardId(effective);
-        return effective;
+        if (boardId != null && !boardId.isBlank()) {
+            return boardId;
+        }
+        ensureBoardsResolved();
+        if (resolvedBoards != null && !resolvedBoards.isEmpty()) {
+            return resolvedBoards.get(0).id();
+        }
+        if (resolvedLegacyBoard != null) {
+            return resolvedLegacyBoard.id();
+        }
+        throw new IllegalStateException(
+                "No board available — set YOUTRACK_BOARDS or pass boardId explicitly");
     }
 
     // -- Current user --------------------------------------------------------
@@ -550,21 +578,85 @@ public class YouTrackClient {
         }
     }
 
-    private void requireBoardId(String boardId) {
-        if (boardId == null || boardId.isBlank()) {
-            throw new IllegalStateException(
-                    "boardId is required — set YOUTRACK_BOARD_ID or pass it explicitly");
+    private String buildProjectClause(String project) {
+        if (project != null && !project.isBlank()) {
+            return " project: {" + project + "}";
         }
+        if (derivedProjects != null && !derivedProjects.isEmpty()) {
+            return " project: " + derivedProjects.stream()
+                    .map(p -> "{" + p + "}")
+                    .collect(Collectors.joining(", "));
+        }
+        return "";
     }
 
-    private String resolveProject(String project) {
-        if (project != null && !project.isBlank()) {
-            return project;
+    private void ensureBoardsResolved() {
+        if (resolvedBoards != null || (boardNames.isEmpty() && legacyBoardName == null)) {
+            return;
         }
-        if (projectId != null && !projectId.isBlank()) {
-            return projectId;
+
+        String url = baseUrl + "/api/agiles?fields="
+                + encode("id,name,projects(id,name,shortName)") + "&$top=100";
+        log.info("Fetching agile boards for auto-discovery");
+        JsonArray allBoards = get(url).getAsJsonArray();
+
+        Map<String, BoardInfo> boardsByName = new HashMap<>();
+        for (JsonElement el : allBoards) {
+            JsonObject board = el.getAsJsonObject();
+            String id = board.get("id").getAsString();
+            String name = board.has("name") && !board.get("name").isJsonNull()
+                    ? board.get("name").getAsString() : id;
+
+            List<String> projectShortNames = new ArrayList<>();
+            if (board.has("projects") && !board.get("projects").isJsonNull()) {
+                for (JsonElement projEl : board.getAsJsonArray("projects")) {
+                    JsonObject proj = projEl.getAsJsonObject();
+                    if (proj.has("shortName") && !proj.get("shortName").isJsonNull()) {
+                        projectShortNames.add(proj.get("shortName").getAsString());
+                    }
+                }
+            }
+            boardsByName.put(name, new BoardInfo(id, name, projectShortNames));
         }
-        return null;
+
+        // Resolve configured boards
+        resolvedBoards = new ArrayList<>();
+        for (String name : boardNames) {
+            BoardInfo info = boardsByName.get(name);
+            if (info != null) {
+                resolvedBoards.add(info);
+                log.info("Resolved board '{}' → id={}, projects={}",
+                        name, info.id(), info.projectShortNames());
+            } else {
+                log.warn("Configured board '{}' not found in YouTrack", name);
+            }
+        }
+
+        // Resolve legacy board
+        if (legacyBoardName != null) {
+            resolvedLegacyBoard = boardsByName.get(legacyBoardName);
+            if (resolvedLegacyBoard != null) {
+                log.info("Resolved legacy board '{}' → id={}, projects={}",
+                        legacyBoardName, resolvedLegacyBoard.id(),
+                        resolvedLegacyBoard.projectShortNames());
+            } else {
+                log.warn("Configured legacy board '{}' not found in YouTrack", legacyBoardName);
+            }
+        }
+
+        // Derive projects from all resolved boards
+        Set<String> projects = new LinkedHashSet<>();
+        for (BoardInfo board : resolvedBoards) {
+            projects.addAll(board.projectShortNames());
+        }
+        if (resolvedLegacyBoard != null) {
+            projects.addAll(resolvedLegacyBoard.projectShortNames());
+        }
+        derivedProjects = new ArrayList<>(projects);
+
+        if (!derivedProjects.isEmpty()) {
+            log.info("Derived projects from boards: {}", derivedProjects);
+        }
     }
 
     private static LocalDate toLocalDate(long epochMs) {

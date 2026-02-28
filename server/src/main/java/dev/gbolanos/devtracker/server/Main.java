@@ -123,7 +123,7 @@ public class Main {
 
         var project = new JsonObject();
         project.addProperty("type", "string");
-        project.addProperty("description", "YouTrack project ID to filter by (e.g. 'IGN'). Optional — defaults to all projects or YOUTRACK_PROJECT_ID");
+        project.addProperty("description", "YouTrack project to filter by. Optional — defaults to projects derived from configured boards (YOUTRACK_BOARDS)");
 
         var properties = new JsonObject();
         properties.add("sprintName", sprintName);
